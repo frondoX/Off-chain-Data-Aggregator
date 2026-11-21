@@ -1,0 +1,135 @@
+Off-chain Meme Indexer MVP（ETH + Solana Meme 币索引器）
+定位：链下索引器（Off-chain Data Aggregator），专门针对 ETH (Uniswap V2)、Solana (Pump.fun + Raydium) Meme 赛道；不做全链同步，只定向订阅 Meme 相关合约事件，为你前面的 OnChainInsight Agent 提供结构化数据源。 目标：黑客松可用，最小闭环；自带连接池、newHeads 订阅、重组检测、缺口补扫、标签预计算；输出标准化数据给 Agent 服务。 语言：Go；输出：HTTP 接口 + Redis Stream 实时流 + Clickhouse 持久存储
+一、MVP 范围边界（严格控制，不膨胀）
+✅ 支持两条链
+* ETH：UniswapV2 PairCreated、Swap、AddLiquidity、RemoveLiquidity（Meme 币大多 V2）
+* Solana：Pump.fun initialize、buy、sell；Raydium bonding curve swap ✅ 只抓 Meme 赛道，不处理主流币、LP 复杂策略 ✅ 能力：多 RPC 连接池、保活切换、新区块订阅、重组检测、缺口补扫、基础标签计算 ✅ 输出：Clickhouse 落盘历史数据，Redis Stream 推送实时事件，对外提供 HTTP 查询接口 ❌ 不做：Solana 全账户扫描、ETH V3、NFT、借贷；不内置交易发送、不做套利；不做复杂机器学习标签，全部规则标签 ❌ 不做：分布式分片、超大集群；MVP 单节点高可用（主备 + etcd checkpoint）
+二、核心业务目标
+1. 实时捕获 Meme 币诞生（PairCreated / Pump initialize），第一时间拿到新币
+2. 持续消费 Swap 买卖事件，记录交易时序、交易者、金额、滑点
+3. 识别链重组（reorg），自动回滚脏数据、标记失效区块
+4. 定时扫描缺口（漏扫区块），补扫历史事件
+5. 预计算轻量标签（规则驱动），给上层 Agent 直接调用
+6. 对外暴露标准化查询接口，给 OnChainInsight Agent 使用
+三、数据流整体架构
+多RPC源（商用RPC + 自建节点）
+        ↓
+RPC连接池（保活、故障探测、自动切换、指数退避重连）
+        ↓
+两个独立订阅分支：
+1. newHeads 新区块头订阅（重组检测、心跳、高度基准）
+2. Log / Geyser 事件订阅（Swap、PairCreated、initialize等）
+        ↓
+事件清洗、归一化、链统一模型（ETH/Solana事件映射成一套标准事件结构体）
+        ↓
+重组校验模块：对比链上canonical链，发现fork则触发回滚
+        ↓
+分流：
+- 实时流：写入Redis Stream（供Agent实时查询）
+- 持久化：写入Clickhouse（历史查询、统计）
+- 标签引擎：实时计算Meme标签
+        ↓
+Checkpoint模块：记录已处理区块高度，写入etcd（主备切换、断点续扫）
+        ↓
+HTTP API层：给Agent提供查询能力
+四、模块详细说明
+模块 1：RPC 连接池（核心）
+* 一组节点配置：ETH（Erigon 自建 + QuickNode）、Solana（Geyser + Helius）
+* 每个节点独立保活探测：定期调用高度接口，超时 / 报错标记为不健康
+* 策略：主节点消费，其余节点热备；主节点假死自动切健康节点；指数退避重试
+* 隔离：ETH、Solana 连接池分开，互不影响
+* 输出：统一的ethClient / solanaClient，上层不用关心底层节点切换
+模块 2：订阅层（两种订阅分开）
+1. newHeads 订阅（必单独订阅）
+    * ETH：eth_subscribe newHeads
+    * Solana：subscribe slot（slot 相当于 ETH 的 block）
+    * 用途：拿到权威高度序列，作为判断重组、节点是否存活的基准；不能只靠日志判断高度
+    * 逻辑：维护一条本地 canonical 高度链；当收到新区块，对比父 hash，发现分叉进入重组流程
+2. 事件订阅
+    * ETH：eth_subscribe logs，过滤 topic：PairCreated、Swap、Add/RemoveLiquidity
+    * Solana：Geyser 订阅，过滤 Pump.fun 程序 ID、Raydium BC 程序 ID
+    * 坑：WS 订阅天然丢消息，订阅只是 “实时优先通道”，不能作为唯一数据源
+模块 3：重组检测 & 回滚模块
+* 检测逻辑：对比 newHeads 的区块 hash，发现本地已经处理的区块不在主链上 → 重组
+* 动作：
+    1. Clickhouse 中标记该区间数据为is_reorg = true（软删除，不直接删，方便审计）
+    2. Redis Stream 推送重组事件通知上层 Agent
+    3. 加入补扫任务队列，重新拉取正确链上数据
+* 输出：每一条数据携带字段 reorg_safe: bool（就是 Agent 调用的check_reorg_safe接口底层）
+模块 4：缺口补扫模块
+* 缺口来源：WS 断连、节点掉线、消息丢包
+* 机制：
+    * 定期（比如 30s）拿当前链最高高度，对比本地 checkpoint 高度，算出缺口区间
+    * 补扫任务串行 + 限速，避免打爆 RPC；补扫区间写入任务队列
+    * 补扫完成后更新 checkpoint
+* 区分：实时订阅负责低延迟，补扫负责数据完整性
+模块 5：事件归一化（非常关键，ETH+Solana 统一模型）
+不管 ETH 还是 Solana 事件，统一转换成标准 MemeEvent 结构体，简化上层 Agent：
+Chain: eth/solana
+EventType: pair_created / swap / add_liquidity / rug_signal
+TokenAddress: 代币地址
+PairAddress: 交易对地址
+Trader: 交易者钱包
+AmountIn / AmountOut: 买卖金额
+BlockNumber / Slot
+BlockHash / SlotHash
+Timestamp
+IsBuy: bool
+IsReorg: bool
+Tags: []string
+Solana 没有 Log，是账户变更事件，这里做适配转换；ETH 是 event log 解析。
+模块 6：Meme 标签引擎（规则驱动，MVP 不训练模型）
+实时计算，附加在事件上，存入 Clickhouse，Agent 直接读取标签：
+* new_meme：刚创建的 Meme 币（PairCreated / Pump initialize）
+* bc_stage：Solana Pump bonding curve 阶段
+* early_buyer：第一批买入钱包
+* mass_sell：短时间大额砸盘
+* high_tax：高交易税代币
+* sniper_candidate：短时间批量抢单钱包
+* smart_money_candidate：历史胜率达标（基于简单规则）
+标签带置信度，例如 confidence: 0.72，避免绝对化
+模块 7：存储层
+1. Redis Stream
+    * stream key：meme:events:{chain}
+    * 消费组：给 Agent 服务消费实时事件
+    * 用途：低延迟实时数据，不存历史
+2. Clickhouse
+    * 主表：meme_events，排序键 (chain, block_number, token_address)
+    * 字段包含上面归一化结构体 + reorg 标记、标签、置信度
+    * 适合历史统计、钱包时序查询、代币筛选
+3. Etcd
+    * 存储 checkpoint：每个链最后安全处理高度、主备 fencing token
+    * 用于主备切换、防脑裂、断点续扫
+模块 8：HTTP API（给 OnChainInsight Agent 调用，就是 Agent 那 6 个工具底层）
+1. GET /api/v1/token/search → 对应 search_token 参数：chain、time_window、tags、min_liquidity
+2. GET /api/v1/wallet/txs → 对应 query_wallet_txs 参数：chain、wallet、start_block、end_block
+3. GET /api/v1/wallet/labels → 对应 get_wallet_label
+4. GET /api/v1/reorg/check → 对应 check_reorg_safe 参数：chain、block_start、block_end
+5. GET /api/v1/solana/bundle → 对应 get_bundle_info（仅 Solana）
+五、MVP 内置的任务调度
+* 保活探测：10s 一次
+* 缺口扫描：30s 一次
+* 重组巡检：跟随 newHeads 触发
+* 补扫任务限速：单 RPC 每秒最多 2 请求，防止限流
+六、技术栈
+* 主语言：Go
+* RPC：ETH（websocket + http rpc）；Solana（Geyser GRPC + Helius）
+* 消息队列：Redis Stream
+* 时序数据库：Clickhouse
+* 共识 / Checkpoint：etcd（轻量单节点 etcd，MVP 不用集群）
+* 日志：结构化日志，输出每个事件的来源、是否补扫、是否重组
+七、MVP 不做（控制范围）
+❌ 不做自动去重之外的复杂风控、AI 模型训练 ❌ 不做 Jito Bundle 深度解析（只抓基础 bundle 信息，二期再扩） ❌ 不做全量账户索引，只监听指定程序 ID / 合约 topic ❌ 不做数据看板前端，只输出 API 和流，前端交给 Agent ❌ 不做复杂告警、多租户、权限系统
+八、部署方案（黑客松低成本）
+1. 单节点 Go 程序，etcd 同机部署（演示用）
+2. RPC 优先使用服务商免费额度，不跑全节点（ETH Erigon、Solana Geyser 全节点成本高）
+3. Clickhouse 单实例，磁盘小容量，只保留最近 7 天 Meme 数据
+4. 可以开启备机做热备，etcd fencing token 防脑裂，主备切换
+九、和 OnChainInsight Agent 的对接关系
+[Meme Indexer] → HTTP API + Redis Stream → [LangGraph Agent Service] → TG Bot / Web
+Agent 完全不需要碰 RPC，所有链上原始数据、重组校验、标签全部由这个索引器兜底，正好匹配你之前 Agent 的设计。
+十、Demo 演示可用的测试场景
+1. 捕获一条新 Pump.fun initialize 事件，打上new_meme标签，实时推入 Redis
+2. 捕获一笔大额卖出，标记mass_sell
+3. 人为模拟一段重组区间，接口返回 reorg_safe=false
+4. 断连 WS，看缺口模块自动补扫缺失区块
