@@ -12,12 +12,20 @@ type PluginConfig map[string]any
 
 // RuntimeConfig 顶层配置
 type RuntimeConfig struct {
-	Chain   ChainConfig    `yaml:"chain"`
-	Plugins PluginsSetting `yaml:"plugins"`
+	Chain      ChainConfig       `yaml:"chain"`
+	Plugins    PluginsSetting    `yaml:"plugins"`
+	Clickhouse *ClickhouseConfig `yaml:"clickhouse"`
 }
 
 type PluginsSetting struct {
 	DataSource string   `yaml:"datasource"`
 	Indexers   []string `yaml:"indexers"`
 	Sinks      []string `yaml:"sinks"`
+}
+
+type ClickhouseConfig struct {
+	Addr     string `yaml:"addr"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	DB       string `yaml:"db"`
 }

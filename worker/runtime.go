@@ -49,14 +49,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 			r.routeTable[topic] = append(r.routeTable[topic], idx)
 		}
 	}
-
+	fmt.Printf("DEBUG cfg raw: %#v\n", r.cfg)
 	// 3. 加载sinks
 	for _, sinkName := range r.cfg.Plugins.Sinks {
 		sink, ok := GetSink(sinkName)
 		if !ok {
 			return fmt.Errorf("sink %s not registered", sinkName)
 		}
-		if err := sink.Init(ctx, nil); err != nil {
+		if err := sink.Init(ctx, r.cfg); err != nil {
 			return err
 		}
 		r.sinks = append(r.sinks, sink)

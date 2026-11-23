@@ -14,9 +14,10 @@ import (
 	"gopkg.in/yaml.v3"
 
 	// 重要：导入插件包，触发init()注册
-	_ "off-chain-data-aggregator/plugins/datasource/evm_rpc" // 新增这一行
+	_ "off-chain-data-aggregator/plugins/datasource/evm_rpc"
 	_ "off-chain-data-aggregator/plugins/datasource/mock_ds"
 	_ "off-chain-data-aggregator/plugins/indexer/uniswap_v2"
+	_ "off-chain-data-aggregator/plugins/sink/clickhouse"
 	_ "off-chain-data-aggregator/plugins/sink/stdout"
 )
 
