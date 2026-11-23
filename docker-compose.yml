@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: ch-uni
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: "123456"
+      CLICKHOUSE_DB: uni
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    restart: unless-stopped
+
+  indexer:
+    build: .
+    container_name: uni-indexer
+    depends_on:
+      - clickhouse
+    volumes:
+      - ./configs:/app/configs
+    restart: unless-stopped
+
+volumes:
+  ch-data:

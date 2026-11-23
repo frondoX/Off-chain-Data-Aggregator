@@ -1,0 +1,61 @@
+# ===================== 启动相关 =====================
+# 后台启动全部服务
+docker-compose up -d
+# 后台只启动 indexer
+docker-compose up -d indexer
+# 启动前重新构建 indexer
+docker-compose up -d --build indexer
+
+# ===================== 停止 & 关闭 =====================
+# 停止所有容器（容器保留）
+docker-compose stop
+# 只停止 indexer
+docker-compose stop indexer
+# 整套下线：删除容器+网络，数据卷保留（常用）
+docker-compose down
+# 整套下线 + 删除数据卷（清空CH数据，重置用）
+docker-compose down -v
+
+# ===================== 重启 / 单独控制 =====================
+# 重启全部
+docker-compose restart
+# 只重启 indexer
+docker-compose restart indexer
+# 启动已经stop的indexer
+docker-compose start indexer
+
+# ===================== 镜像构建（改代码用） =====================
+# 单独构建 indexer
+docker-compose build indexer
+# 无缓存构建（干净编译）
+docker-compose build --no-cache indexer
+
+# ===================== 日志查看 =====================
+# 实时跟踪indexer日志
+docker-compose logs -f indexer
+# 看最后200行日志
+docker-compose logs --tail 200 indexer
+# 查看当前项目容器状态
+docker-compose ps
+
+# ===================== 进入容器 =====================
+# 进入clickhouse容器shell
+docker-compose exec clickhouse bash
+# 直接打开ch客户端
+docker-compose exec clickhouse clickhouse-client -u default --password 123456 -d uni
+# 进入indexer容器shell
+docker-compose exec indexer bash
+
+# ===================== 删除容器 =====================
+# 删除已停止的indexer容器
+docker-compose rm indexer
+# 强制删除运行中的indexer容器
+docker-compose rm -f indexer
+
+# ===================== 辅助命令 =====================
+# 拉取镜像（如clickhouse更新）
+docker-compose pull clickhouse
+# 校验yaml配置，查看解析结果
+docker-compose config
+# 查看项目镜像列表
+docker-compose images

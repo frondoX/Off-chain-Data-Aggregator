@@ -11,7 +11,7 @@ plugins:
     - stdout
     - clickhouse
 clickhouse:
-  addr: "127.0.0.1:9000"
+  addr: "clickhouse:9000"
   user: "default"
   password: "123456"
   db: "uni"
