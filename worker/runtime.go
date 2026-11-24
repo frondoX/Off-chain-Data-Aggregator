@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"off-chain-data-aggregator/api"
 )
@@ -49,7 +50,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 			r.routeTable[topic] = append(r.routeTable[topic], idx)
 		}
 	}
-	fmt.Printf("DEBUG cfg raw: %#v\n", r.cfg)
+
 	// 3. 加载sinks
 	for _, sinkName := range r.cfg.Plugins.Sinks {
 		sink, ok := GetSink(sinkName)
@@ -74,15 +75,60 @@ func (r *Runtime) Start(ctx context.Context) error {
 }
 
 func (r *Runtime) loop(ctx context.Context, eventCh <-chan *api.ChainEvent) {
+	maxBatch := r.cfg.MaxSinkBatchSize
+	if maxBatch <= 0 {
+		maxBatch = 2000
+	}
+	flushInterval := r.cfg.SinkFlushInterval
+	if flushInterval <= 0 {
+		flushInterval = time.Second
+	}
+
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+
+	var allRecords []*api.Record
+
 	for {
 		select {
 		case <-ctx.Done():
+			// 退出时刷剩余数据
+			if len(allRecords) > 0 {
+				for _, s := range r.sinks {
+					if err := s.Write(ctx, allRecords); err != nil {
+						fmt.Printf("flush residual records err: %v, sink=%s\n", err, s.Name())
+					}
+				}
+				allRecords = nil
+			}
 			return
+
+		case <-ticker.C:
+			// 定时刷盘：不够条数也落地
+			if len(allRecords) > 0 {
+				batch := allRecords
+				for _, s := range r.sinks {
+					if err := s.Write(ctx, batch); err != nil {
+						fmt.Printf("sink flush interval err: %v, sink=%s\n", err, s.Name())
+					}
+				}
+				allRecords = nil
+			}
+
 		case evt, ok := <-eventCh:
 			if !ok {
+				// 数据源通道关闭，刷残留
+				if len(allRecords) > 0 {
+					for _, s := range r.sinks {
+						if err := s.Write(ctx, allRecords); err != nil {
+							fmt.Printf("flush residual records err: %v, sink=%s\n", err, s.Name())
+						}
+					}
+					allRecords = nil
+				}
 				return
 			}
-			var allRecords []*api.Record
+
 			for _, log := range evt.Logs {
 				if len(log.Topics) == 0 {
 					continue
@@ -95,19 +141,22 @@ func (r *Runtime) loop(ctx context.Context, eventCh <-chan *api.ChainEvent) {
 				for _, idx := range idxList {
 					recs, err := idx.OnLog(ctx, &log)
 					if err != nil {
-						// demo：简单打日志，不做重试
 						fmt.Printf("indexer err: %v\n", err)
 						continue
 					}
 					allRecords = append(allRecords, recs...)
+
+					// 条数触发，满了立刻分批刷
+					for len(allRecords) >= maxBatch {
+						batch := allRecords[:maxBatch]
+						for _, s := range r.sinks {
+							if err := s.Write(ctx, batch); err != nil {
+								fmt.Printf("sink write batch err: %v, sink=%s\n", err, s.Name())
+							}
+						}
+						allRecords = allRecords[maxBatch:]
+					}
 				}
-			}
-			if len(allRecords) == 0 {
-				continue
-			}
-			// 写入所有sink
-			for _, s := range r.sinks {
-				_ = s.Write(ctx, allRecords)
 			}
 		}
 	}

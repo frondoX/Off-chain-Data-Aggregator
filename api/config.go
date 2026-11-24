@@ -1,5 +1,7 @@
 package api
 
+import "time"
+
 // ChainConfig 单链配置
 type ChainConfig struct {
 	ChainID     uint64 `yaml:"chain_id"`
@@ -12,9 +14,11 @@ type PluginConfig map[string]any
 
 // RuntimeConfig 顶层配置
 type RuntimeConfig struct {
-	Chain      ChainConfig       `yaml:"chain"`
-	Plugins    PluginsSetting    `yaml:"plugins"`
-	Clickhouse *ClickhouseConfig `yaml:"clickhouse"`
+	Chain             ChainConfig       `yaml:"chain"`
+	Plugins           PluginsSetting    `yaml:"plugins"`
+	Clickhouse        *ClickhouseConfig `yaml:"clickhouse"`
+	MaxSinkBatchSize  int               `yaml:"max_sink_batch_size"` // 单批最大记录数，例如 2000
+	SinkFlushInterval time.Duration     `yaml:"sink_flush_interval"`
 }
 
 type PluginsSetting struct {

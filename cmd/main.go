@@ -36,6 +36,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 创建顶层上下文，确保关闭时候，所有goroutine都能收到通知
 	ctx, cancel := context.WithCancel(context.Background())
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -45,6 +46,7 @@ func main() {
 		cancel()
 	}()
 
+	// 创建runtime并启动
 	rt := worker.NewRuntime(&cfg)
 	if err := rt.Start(ctx); err != nil {
 		fmt.Printf("start runtime err: %v\n", err)

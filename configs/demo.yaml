@@ -2,7 +2,7 @@ chain:
   chain_id: 1
   start_height: 26420000
   # 这里换成你自己的RPC节点，比如alchemy、infura、public rpc
-  rpc_endpoint: "https://eth-mainnet.g.alchemy.com/v2/xxx"
+  rpc_endpoint: "https://eth-mainnet.g.alchemy.com/v2/yrk"
 plugins:
   datasource: evm_rpc
   indexers:
@@ -11,7 +11,14 @@ plugins:
     - stdout
     - clickhouse
 clickhouse:
-  addr: "clickhouse:9000"
+  addr: "127.0.0.1:9000"
   user: "default"
   password: "123456"
   db: "uni"
+  batch_size: 200
+  flush_interval_ms: 500
+  max_retry: 3
+  initial_retry_ms: 100
+  enable_retry: true
+max_sink_batch_size: 2000
+sink_flush_interval: 1s
